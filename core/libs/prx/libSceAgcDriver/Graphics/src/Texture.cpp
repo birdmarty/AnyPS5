@@ -7440,6 +7440,71 @@ void StorageTexture::writeBackLayers(const std::vector<bool>& layers) {
     else segments = importSegments();
     if (flushReason != nullptr && std::strcmp(flushReason, "idle") == 0 && GuestMemory::Watched(firstStored, static_cast<std::size_t>(lastStored - firstStored))) segments.clear();
     if (!segments.empty()) {
+        if (unsavedOutsideWatch) {
+            std::fprintf(stderr,
+                "[agc-unsaved-debug] image=0x%llx+0x%llx (%ux%u mips=%u layers=%u fmt=%u tile=%d dim=%d blockUnits=%d dcc=0x%llx) flush=%s version=%llu writes=%llu gen=%llu orig=%zu genBase=%zu anyDue=%d hashSize=%zu watched=%d writeWatched=%d segments=%zu\n",
+                static_cast<unsigned long long>(descriptor.baseAddress),
+                static_cast<unsigned long long>(guestBytes),
+                descriptor.width, descriptor.height, descriptor.mipCount, arrayLayers,
+                descriptor.format, static_cast<int>(descriptor.tileMode), static_cast<int>(descriptor.dimension),
+                static_cast<int>(blockUnits),
+                static_cast<unsigned long long>(descriptor.dccAddress),
+                flushReason != nullptr ? flushReason : "(null)",
+                static_cast<unsigned long long>(version),
+                static_cast<unsigned long long>(writes),
+                static_cast<unsigned long long>(generation),
+                original.size(), generationBaseline.size(),
+                static_cast<int>(anyBaselineDue.load(std::memory_order_relaxed)),
+                unwatchHash.size(),
+                static_cast<int>(GuestMemory::Watched(descriptor.baseAddress, static_cast<std::size_t>(guestBytes))),
+                static_cast<int>(GuestMemory::WriteWatched()),
+                segments.size());
+            for (std::uint32_t u = 0; u < trackedLayers; ++u) {
+                const auto uBegin = layerBegin(u);
+                const auto uBytes = static_cast<std::size_t>(layerBytes(u));
+                std::size_t diffOffset = uBytes;
+                std::uint32_t curWord = 0;
+                std::uint32_t baseWord = 0;
+                if (generationBaseline.size() == guestBytes && uBytes != 0) {
+                    std::vector<std::byte> cur(uBytes);
+                    GuestMemory::ReadCommittedUnsynced(uBegin, cur);
+                    const auto uOff = static_cast<std::size_t>(uBegin - descriptor.baseAddress);
+                    for (std::size_t k = 0; k < uBytes; ++k) {
+                        if (cur[k] != generationBaseline[uOff + k]) {
+                            diffOffset = k;
+                            const auto wordOff = k & ~std::size_t{3};
+                            if (wordOff + 4 <= uBytes) {
+                                std::memcpy(&curWord, cur.data() + wordOff, 4);
+                                std::memcpy(&baseWord, generationBaseline.data() + uOff + wordOff, 4);
+                            }
+                            break;
+                        }
+                    }
+                }
+                std::fprintf(stderr,
+                    "[agc-unsaved-debug]   unit %u: begin=0x%llx+0x%zx sel=%d pend=%d orig=%d comp=%d tracked=%d watched=%d gen=%llu ticket=%llu due=%d rebase=%llu keptCpu=%d diffAt=0x%zx cur=0x%08x base=0x%08x miss=%d (%s)\n",
+                    u,
+                    static_cast<unsigned long long>(uBegin),
+                    uBytes,
+                    static_cast<int>(layers[u]),
+                    static_cast<int>(layerPending[u]),
+                    static_cast<int>(layerOriginal[u]),
+                    static_cast<int>(compared[u]),
+                    static_cast<int>(unitTracked.empty() ? tracked : unitTracked[u]),
+                    static_cast<int>(GuestMemory::Watched(uBegin, uBytes)),
+                    static_cast<unsigned long long>(layerGeneration[u]),
+                    static_cast<unsigned long long>(savedTicket[u]),
+                    static_cast<int>(u < baselineDue.size() && baselineDue[u]),
+                    static_cast<unsigned long long>(u < rebaseTicket.size() ? rebaseTicket[u] : 0ull),
+                    static_cast<int>(keptForCpu(u)),
+                    diffOffset,
+                    curWord,
+                    baseWord,
+                    static_cast<int>(pendingMiss[u]),
+                    BaselineMissText(pendingMiss[u]));
+            }
+            std::fflush(stderr);
+        }
         Require(!unsavedOutsideWatch, unsavedCause);
         // Outside the write watch the stored bytes are what the next store compares with.
         const auto saveUnits = GuestMemory::Watched(firstStored, static_cast<std::size_t>(lastStored - firstStored)) ? std::vector<std::uint32_t>{} : prepareStoredSave(layers, skippedLayer);
