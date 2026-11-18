@@ -1999,6 +1999,27 @@ void ShaderResources::KeepStorageImageBytes(Recorder& recorder) const {
     }
 }
 
+std::size_t ShaderResources::RefreshStorageChangedOutsideWatch() {
+    static const bool skipForDiagnosis = std::getenv("APS5_DIAG_NO_RECORD_REFRESH") != nullptr;
+    std::size_t refreshed = 0;
+    const auto refresh = [&](const std::shared_ptr<StorageTexture>& image) {
+        if (image == nullptr || !image->ChangedOutsideWatch()) return;
+        static std::atomic<int> reports{0};
+        if (reports.fetch_add(1, std::memory_order_relaxed) < 32) std::fprintf(stderr, "[agc-rebase-diag] record-time refresh%s: storage image 0x%llx+0x%llx changed outside the write watch since its bindings were made\n", skipForDiagnosis ? " SKIPPED (APS5_DIAG_NO_RECORD_REFRESH)" : "", static_cast<unsigned long long>(image->Descriptor().baseAddress), static_cast<unsigned long long>(image->GuestBytes()));
+        if (skipForDiagnosis) return;
+        image->Refresh();
+        ++refreshed;
+    };
+    for (std::size_t index = 0; index < storageTextures.size(); ++index) {
+        if (index != 0 && storageTextures[index] == storageTextures[index - 1]) continue;
+        refresh(storageTextures[index]);
+    }
+    for (const auto& texture : textures) {
+        if (texture != nullptr) refresh(texture->SharedStorageSource());
+    }
+    return refreshed;
+}
+
 ShaderResources::ShaderResources(const Context& context, std::span<const CompiledShader> shaders, const ColorTarget& target, std::uint32_t colorAttachments, std::uint64_t indexAddress, std::size_t indexBytes, std::span<const GuestMemorySnapshot> snapshots, bool deviceStaging) : context(context), guestMemory(context) {
     drawBuild = true;
     const bool addressTables = std::ranges::any_of(shaders, [](const CompiledShader& shader) { return shader.program != nullptr && std::ranges::any_of(shader.program->bindings, [](const auto& binding) { return binding.role == ShaderRecompiler::DescriptorRole::BdaPagetable; }); });

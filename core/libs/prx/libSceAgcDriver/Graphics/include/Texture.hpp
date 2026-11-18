@@ -526,6 +526,7 @@ public:
     // was still current (nothing uploaded).
     // Keeps the image current with guest memory (see GuestMemory::CollectWrites).
     bool Refresh();
+    bool ChangedOutsideWatch() const;
     bool RefreshLayers(std::uint32_t first, std::uint32_t count);
     inline static std::atomic<std::uint64_t> epochRefreshes{0};
     static std::uint64_t SinglePassMoves();
@@ -573,12 +574,39 @@ private:
     };
     static const char* BaselineMissText(BaselineMiss miss);
     BaselineMiss baselineMiss(std::uint32_t unit) const;
+    bool unitChangedOutsideWatch(std::uint32_t unit) const;
     std::array<std::uint64_t, 2> unitContentHash(std::uint32_t unit) const;
     void hashBeforeUnwatch(std::uint64_t address, std::size_t bytes, bool proven);
     void forgetUnwatchHash(std::uint32_t first, std::uint32_t count);
     void rebaseBeforeUnwatch(std::uint64_t address, std::size_t bytes, bool proven);
     void applyRebase(std::uint64_t ticket, std::uint32_t unit);
     void readBaseline(std::uint32_t unit);
+    struct BaselineEvent {
+        std::uint64_t generation = 0;
+        std::uint64_t at = 0;
+        std::uint32_t guestWord = 0;
+        std::uint32_t baseWord = 0;
+        std::uint64_t other = 0;
+        std::uint32_t otherBytes = 0;
+        char kind = 0;
+        std::uint8_t unit = 0;
+        std::uint8_t detail = 0;
+    };
+    std::array<BaselineEvent, 160> baselineEvents{};
+    std::uint32_t baselineEventCount = 0;
+    BaselineEvent* noteBaseline(char kind, std::uint32_t unit, std::uint8_t detail, bool readGuest = true, const std::byte* known = nullptr);
+    std::vector<bool> driftNoted;
+    bool baselineDrift();
+    std::vector<bool> diagStale;
+    bool refreshLogging();
+    struct RebaseDiag {
+        std::uint64_t oldBaseHash = 0;
+        std::uint64_t earlyHash = 0;
+        std::uint8_t flags = 0;
+    };
+    std::vector<RebaseDiag> rebaseDiag;
+    bool diagOldExcluded = false;
+    void reportRebase(std::uint32_t unit, std::uint64_t newHash);
     void awaitRebase(std::uint32_t unit);
     bool originalHolds(std::uint64_t address, std::size_t bytes) const;
     bool guestBytesStillHeld() const;
@@ -613,7 +641,7 @@ private:
     void releaseUnheldOriginal();
     // Lets the batches holding the saves of the units `layers` selects (every unit for none) complete.
     void awaitStoredSave(const std::vector<bool>* layers);
-    bool guestBytesSettled() const;
+    bool unitSettled(std::uint32_t unit) const;
     // Tracked units as 64 KiB write-stamp blocks (`blockUnits`: a thin tiled surface at a 64 KiB
     // aligned base; APS5_NO_BLOCK_TRACKING=1 tracks array layers as above instead): a fill of one
     // layer, a CPU write or another image's store then costs the blocks it touched, moved through
