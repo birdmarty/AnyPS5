@@ -5191,6 +5191,7 @@ void RunColorMetadataPass(const Context& context, const ColorMetadataPass& pass)
         return;
     }
     for (const auto& color : pass.targets) {
+        ClaimMultisampleTargetMemory(color.MemoryAddress(), color.bytes);
         if (color.cmaskAddress != 0) {
             const auto resident = metadataPassResident(context, color);
             if (materializeCmaskClear(context, color, resident) && resident != nullptr) resident->MarkDirty();
